@@ -97,7 +97,13 @@ feature coverage.
 | **APPROVED** | Regression verdict CLEAN · all endpoints/flows tested · ≥ 80% error cases tested · no unresolved implementation bugs |
 | **REJECTED** | ANY of: regression verdict REGRESSIONS FOUND · any required flow untested · < 80% error cases tested · unresolved implementation bugs |
 
-## Configurable behaviour (`claude.md`)
+## Constraints
+- Do not modify production or test code.
+- Do not conceal unverified acceptance criteria.
+- Do not override unresolved blocking review findings.
+- Do not fabricate execution or test evidence.
+
+## Configurable behaviour (`AGENTS.md`)
 ```yaml
 pipeline:
   prompts:

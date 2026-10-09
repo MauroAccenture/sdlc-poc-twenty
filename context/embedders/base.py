@@ -10,7 +10,7 @@ Implementing a new embedder
 1. Subclass Embedder.
 2. Implement embed_batch() and get_dimension().
 3. Register in context/embedders/__init__.py.
-4. Set embedder.provider in claude.md.
+4. Set embedder.provider in AGENTS.md.
 
 Important: the dimension returned by get_dimension() must match the
 dimension of the vectors stored in the vector store. If you switch

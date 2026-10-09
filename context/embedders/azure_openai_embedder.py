@@ -5,7 +5,7 @@ Uses the Azure OpenAI Service to generate embeddings.
 Requires an Azure OpenAI deployment of text-embedding-ada-002 or
 text-embedding-3-small/large.
 
-Configuration (claude.md)
+Configuration (AGENTS.md)
 ─────────────────────────
 context:
   embedder:

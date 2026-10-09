@@ -6,7 +6,7 @@ Interface is fully defined. Implementation requires:
   - The `msal` package for OAuth2 authentication
   - The `office365-rest-python-client` package or direct Graph API calls
 
-Configuration (claude.md) — when implemented
+Configuration (AGENTS.md) — when implemented
 ─────────────────────────────────────────────
 sources:
   - type: sharepoint

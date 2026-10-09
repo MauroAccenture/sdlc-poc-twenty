@@ -18,7 +18,7 @@ permissions:
 # Unlike the pipeline version (5 separate jobs), this is a single job.
 # The Orchestrator agent drives all stages internally, including retry loops.
 #
-# Human review gates: configure in claude.md + GitHub Environment settings.
+# Human review gates: configure in AGENTS.md + GitHub Environment settings.
 # The workflow uses the "human-review" environment — add required reviewers
 # there to pause the pipeline before the Orchestrator creates the PR.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ jobs:
           uses: actions/cache@v4
           with:
             path: .index/index-state.json
-            key: index-state-${{ github.ref_name }}-${{ hashFiles('CLAUDE.md') }}
+            key: index-state-${{ github.ref_name }}-${{ hashFiles('AGENTS.md') }}
             restore-keys: |
               index-state-${{ github.ref_name }}-
 

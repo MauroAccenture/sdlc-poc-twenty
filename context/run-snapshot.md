@@ -48,7 +48,7 @@ The overall pipeline shape (OneDrive trigger → queue → worker activities →
 - `azure.yaml` — remove `playwright_service` service entry
 - `DEPLOYMENT.md` — update Key Vault secrets list and remove playwright-specific steps
 - All `app/tests/` files that reference `playwright_service`, `vinted_taxonomy`, or `scraping_client`
-- `CLAUDE.md` — update stack hints, prompt guidelines, and file layout to reflect the new structure
+- `AGENTS.md` — update stack hints, prompt guidelines, and file layout to reflect the new structure
 
 **Key Vault secrets after change:**
 

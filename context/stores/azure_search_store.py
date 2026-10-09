@@ -5,7 +5,7 @@ Uses Azure AI Search (formerly Cognitive Search) as the vector store.
 Supports both pure vector search and hybrid search (vector + BM25 keyword),
 which typically outperforms pure vector search on code retrieval.
 
-Configuration (claude.md)
+Configuration (AGENTS.md)
 ─────────────────────────
 context:
   store:

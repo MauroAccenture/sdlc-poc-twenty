@@ -10,7 +10,7 @@ Implementing a new connector
 1. Subclass SourceConnector.
 2. Implement all abstract methods.
 3. Register in context/connectors/__init__.py.
-4. Add a config section in claude.md under sources:.
+4. Add a config section in AGENTS.md under sources:.
 5. That's it — the indexer, agents, and retriever need no changes.
 
 Contract

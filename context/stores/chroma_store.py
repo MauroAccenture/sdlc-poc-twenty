@@ -10,7 +10,7 @@ first run in a new environment (e.g. fresh CI runner). For persistent
 cross-CI indexing, either cache .index/ in GitHub Actions or switch to
 a cloud store (Azure AI Search, Qdrant Cloud).
 
-Configuration (claude.md)
+Configuration (AGENTS.md)
 ─────────────────────────
 context:
   store:

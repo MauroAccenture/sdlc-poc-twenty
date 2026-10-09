@@ -4,7 +4,7 @@ GitHub source connector.
 Fetches files from a remote GitHub repository via the GitHub REST API.
 No local clone required — files are fetched on demand.
 
-Configuration (claude.md)
+Configuration (AGENTS.md)
 ─────────────────────────
 sources:
   - type: github

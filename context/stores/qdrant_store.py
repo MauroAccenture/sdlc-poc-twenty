@@ -5,7 +5,7 @@ Connects to a Qdrant Cloud cluster (or any self-hosted Qdrant instance)
 over HTTPS using an API key. The collection is created automatically on
 first use with cosine similarity and the configured vector size.
 
-Configuration (CLAUDE.md)
+Configuration (AGENTS.md)
 ─────────────────────────
 context:
   store:

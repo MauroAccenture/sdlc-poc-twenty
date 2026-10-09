@@ -10,7 +10,7 @@ Implementing a new store
 1. Subclass VectorStore.
 2. Implement all five abstract methods.
 3. Register in context/stores/__init__.py.
-4. Set store.provider in claude.md.
+4. Set store.provider in AGENTS.md.
 
 Switching stores
 ────────────────

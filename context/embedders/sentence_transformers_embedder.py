@@ -10,12 +10,12 @@ Default model: all-MiniLM-L6-v2
   - Strong performance on code and prose similarity
   - Fully open source (Apache 2.0)
 
-Alternative models (set in claude.md):
+Alternative models (set in AGENTS.md):
   - all-mpnet-base-v2     : 768 dims, higher quality, slower
   - all-MiniLM-L12-v2    : 384 dims, slightly better than L6
   - microsoft/codebert-base: optimised for code (768 dims)
 
-Configuration (claude.md)
+Configuration (AGENTS.md)
 ─────────────────────────
 context:
   embedder:

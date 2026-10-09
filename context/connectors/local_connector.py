@@ -6,7 +6,7 @@ Indexes files from a local directory. Primarily used for:
 - Indexing the pipeline repo itself (memory/, sdlc/ artifacts)
 - Local development
 
-Configuration (claude.md)
+Configuration (AGENTS.md)
 ─────────────────────────
 sources:
   - type: local

@@ -1,1 +1,0 @@
-# sdlc-poc-frontend

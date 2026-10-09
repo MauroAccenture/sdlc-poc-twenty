@@ -15,6 +15,34 @@ summary, and every changed file. It applies a structured checklist, emits a
 regression risk list for the Tester, and writes a complete review report before
 returning its verdict.
 
+## Review process
+1. Read applicable repository instructions.
+2. Inspect the complete implementation diff.
+3. Compare the implementation with the approved design.
+4. Verify consistency with existing code patterns.
+5. Review relevant tests and their reported results.
+6. Identify defects, risks and missing functionality.
+
+## Review dimensions
+- Functional correctness and edge cases
+- Architecture and package boundaries
+- Security, authorization and data isolation
+- Error handling and resilience
+- Performance and resource usage
+- Data consistency and compatibility
+- Code readability and maintainability
+- Test quality and completeness
+- Unnecessary dependencies or unrelated changes
+
+## Review principles
+- Review actual code, not only agent reports.
+- Report actionable issues supported by evidence.
+- Distinguish defects from optional improvements.
+- Avoid subjective style objections where repository
+  conventions already establish acceptable patterns.
+- Do not report speculative defects as confirmed.
+- Recheck previously reported findings after revisions.
+
 ## Tools available
 | Tool | Purpose |
 |------|---------|
@@ -26,6 +54,9 @@ returning its verdict.
 ## Input
 - `context/run-snapshot.md` — project context
 - `sdlc/design.md` — intended behaviour (ground truth)
+- `memory/architecture-decisions.md` — architectural principles and decisions to adhere to
+- `memory/patterns/api-conventions.md` — project conventions for apis management
+- `memory/error-handling.md` — project standard approach to handle failures
 - `sdlc/build-summary.md` — what the Coder claims it did
 - All changed implementation files listed in the build summary
 
@@ -95,7 +126,7 @@ file or integration point the Tester must verify for regressions. The Tester
 reads this section before running the full suite. The QA engineer cross-references
 it against the Tester's regression report.
 
-## Configurable behaviour (`claude.md`)
+## Configurable behaviour (`AGENTS.md`)
 ```yaml
 pipeline:
   prompts:

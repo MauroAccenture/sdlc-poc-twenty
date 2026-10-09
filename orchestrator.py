@@ -4,7 +4,7 @@ Orchestrator — entry point for the agentic SDLC pipeline.
 
 Startup sequence (before any agent runs)
 ─────────────────────────────────────────
-1. Read config from claude.md
+1. Read config from AGENTS.md
 2. Load project memory  → inject into agent contexts
 3. Run/update RAG index → from configured remote sources
 4. Build run snapshot   → shared context file all agents read first
@@ -65,28 +65,33 @@ def _checkpoint_file(sdlc: Path) -> Path:
     concurrent feature branches never share or clobber each other's state.
 
     Derivation order:
-      1. GITHUB_REF_NAME env var  — set by GitHub Actions on push/PR events
-      2. `git rev-parse --abbrev-ref HEAD`  — works locally
-      3. "default"  — hard fallback (single-branch / detached HEAD)
+      1. git rev-parse --abbrev-ref HEAD — primary; the workflow always checks
+         out the feature branch before the orchestrator runs, so HEAD is the
+         correct branch in both the issue-label and PR-merge trigger paths.
+      2. PIPELINE_BRANCH env var — fallback for local runs where HEAD may not
+         be on the feature branch.
+      3. "default" — hard fallback (detached HEAD / bare checkout edge case).
+
+    GITHUB_REF_NAME is intentionally NOT used: for pull_request events GitHub
+    Actions sets it to the PR merge ref (e.g. "42/merge") rather than the branch
+    name, which produces a different checkpoint slug on every resume run.
 
     Branch names are sanitised to safe filename characters so that names
     like "feature/add-login" produce "checkpoint-feature-add-login.json"
     rather than a path with a directory separator.
     """
-    branch = (
-        os.environ.get("GITHUB_REF_NAME", "").strip()
-        or os.environ.get("GITHUB_HEAD_REF", "").strip()
-    )
+    branch = ""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, cwd=str(REPO_ROOT),
+        )
+        if result.returncode == 0 and result.stdout.strip() not in ("HEAD", ""):
+            branch = result.stdout.strip()
+    except Exception:
+        pass
     if not branch:
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True, text=True, cwd=str(REPO_ROOT),
-            )
-            if result.returncode == 0:
-                branch = result.stdout.strip()
-        except Exception:
-            pass
+        branch = os.environ.get("PIPELINE_BRANCH", "").strip()
     slug = re.sub(r"[^a-zA-Z0-9._-]", "-", branch or "default")
     return sdlc / f"checkpoint-{slug}.json"
 
@@ -104,15 +109,21 @@ def _load_checkpoint(sdlc: Path, intent: str) -> dict:
     from scratch so the new intent is processed with a clean slate.
     """
     path = _checkpoint_file(sdlc)
+    print(f"  Checkpoint path: {path}")
     if not path.exists():
+        print(f"  Checkpoint not found — fresh run")
         return {}
     try:
         data = json.loads(path.read_text())
-    except Exception:
+    except Exception as e:
+        print(f"  Checkpoint unreadable ({e}) — fresh run")
         return {}
-    if data.get("intent_hash") != _intent_hash(intent):
-        print(f"  Intent changed — discarding checkpoint from previous run")
+    saved_hash = data.get("intent_hash", "")
+    current_hash = _intent_hash(intent)
+    if saved_hash != current_hash:
+        print(f"  Intent hash mismatch (saved={saved_hash}, current={current_hash}) — discarding checkpoint")
         return {}
+    print(f"  Checkpoint loaded: completed={data.get('completed', [])}")
     return data
 
 
@@ -136,6 +147,9 @@ def _mark_stage_done(sdlc: Path, intent: str, stage: str, extras: dict) -> None:
     if stage not in data["completed"]:
         data["completed"].append(stage)
     data.update(extras)
+    issue_number = os.environ.get("ISSUE_NUMBER", "")
+    if issue_number:
+        data["issue_number"] = issue_number
     data["last_updated"] = datetime.now(timezone.utc).isoformat()
     path.write_text(json.dumps(data, indent=2))
 
@@ -193,19 +207,15 @@ def main() -> None:
     memory_context = memory.load_context()
     print(f"  Memory loaded ({len(memory_context)} chars)")
 
-    greenfield = _is_greenfield(config)
+    # ── 1b. Sync target application repository ────────────────────────────────
+    _banner("Syncing target repository → ./app")
+    _sync_app_repo(config)
 
-    # ── 1b. Sync or initialise target application directory ───────────────────
-    if greenfield:
-        _banner("Greenfield mode — initialising ./app")
-        _init_app_greenfield(config)
-    else:
-        _banner("Syncing target repository → ./app")
-        _sync_app_repo(config)
-
-    # ── 1b2. Capture baseline test failures (fresh brownfield runs only) ──────
-    # Skipped in greenfield mode — there is no existing test suite to baseline.
-    if not completed and not greenfield:
+    # ── 1b2. Capture baseline test failures (fresh runs only) ─────────────────
+    # Run the full suite on the virgin clone before the Coder writes anything.
+    # The output file (sdlc/test-baseline.txt) lets the Tester classify failures
+    # as PRE-EXISTING rather than REGRESSION, preventing false rejections.
+    if not completed:
         _banner("Capturing pre-existing test failures (baseline)")
         _capture_test_baseline(sdlc)
 
@@ -224,7 +234,6 @@ def main() -> None:
         memory_dir=str(REPO_ROOT / "memory"),
         intent=intent,
         config=config,
-        greenfield=greenfield,
     )
     print(f"  Snapshot written to context/run-snapshot.md")
 
@@ -245,6 +254,7 @@ def main() -> None:
 
     # ── Stage 1: Designer ─────────────────────────────────────────────────────
     _banner("Stage 1 · Designer")
+    _ran_designer = "designer" not in completed
     if "designer" in completed:
         design_summary = ckpt["design_summary"]
         print(f"  ↩️  Skipping — already completed in previous run")
@@ -255,7 +265,6 @@ def main() -> None:
             memory_context=memory_context,
             preloaded_context=designer_preload,
             project_guidelines=_prompts.get("design_guidelines", ""),
-            greenfield=greenfield,
         )
 
         clarification_path = sdlc / "clarification-needed.md"
@@ -272,9 +281,14 @@ def main() -> None:
         _mark_stage_done(sdlc, intent, "designer", {"design_summary": design_summary})
         print(f"\n✅ Design: {design_summary}\n")
 
-    if _gate_enabled(config, "after_design"):
+    # Gate fires only when the designer ran in THIS execution — not on resume runs
+    # where the stage was already reviewed and approved via a merged PR.
+    if _ran_designer and _gate_enabled(config, "after_design"):
         _banner("Human gate: after design")
-        print("  Paused — awaiting approval in GitHub Actions environment.\n")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            _create_gate_pr(intent, "after_design")
+            return
+        print("  (local run — continuing past gate)")
 
     # Design is now written — read it once for all downstream agents
     design_path = sdlc / "design.md"
@@ -294,6 +308,7 @@ def main() -> None:
     _coder_guidelines  = _prompts.get("build_guidelines", "") + _recurring_patterns_note(memory, "Coder")
     _tester_guidelines = _prompts.get("test_guidelines", "") + _recurring_patterns_note(memory, "Tester")
     manifest = None   # populated inside else-block; declared here for Stage 3b scope
+    _ran_code_review = "code_review" not in completed
     if "code_review" in completed:
         build_summary  = ckpt["build_summary"]
         review_verdict = ckpt["review_verdict"]
@@ -317,7 +332,6 @@ def main() -> None:
                     preloaded_context=downstream_preload,
                     extra_context=coder_extra,
                     project_guidelines=_coder_guidelines,
-                    greenfield=greenfield,
                 )
                 print(f"\n✅ Build: {build_summary}")
 
@@ -402,14 +416,18 @@ def main() -> None:
             "test_summary_pre_qa": test_summary,
         })
 
-    if _gate_enabled(config, "after_code_review"):
+    if _ran_code_review and _gate_enabled(config, "after_code_review"):
         _banner("Human gate: after code review")
-        print("  Paused — awaiting approval in GitHub Actions environment.\n")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            _create_gate_pr(intent, "after_code_review")
+            return
+        print("  (local run — continuing past gate)")
 
     # ── Stage 3b: QA engineer — coverage loop ─────────────────────────────────
     # Only reached when the implementation is correct (Tester found no bugs).
     # QA reviews coverage quality; if insufficient, only the Tester is retried.
     _banner("Stage 3 · QA engineer (coverage loop)")
+    _ran_qa = "qa" not in completed
     if "qa" in completed:
         test_summary = ckpt["test_summary"]
         qa_verdict   = ckpt["qa_verdict"]
@@ -474,9 +492,12 @@ def main() -> None:
     _banner("Persisting test suite")
     _save_test_suite()
 
-    if _gate_enabled(config, "after_qa_review"):
+    if _ran_qa and _gate_enabled(config, "after_qa_review"):
         _banner("Human gate: after QA review")
-        print("  Paused — awaiting approval in GitHub Actions environment.\n")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            _create_gate_pr(intent, "after_qa_review")
+            return
+        print("  (local run — continuing past gate)")
 
     # ── Record run in memory ──────────────────────────────────────────────────
     _banner("Recording run in memory")
@@ -539,60 +560,26 @@ def _capture_test_baseline(sdlc: Path) -> None:
     if not app_dir.exists():
         return  # app not cloned yet; baseline will be skipped
     print("  Running baseline test suite on virgin app clone…")
-    # Derive the test command from the stack config so the baseline works for
-    # any framework, not just Angular/Karma.
-    stack = _read_config().get("pipeline", {}).get("context", {}).get("stack") or {}
-    framework = stack.get("test_framework", "").lower()
-    if "pytest" in framework or stack.get("language", "").lower() == "python":
-        cmd = ["python", "-m", "pytest", "--tb=no", "-q"]
-    elif "jest" in framework:
-        cmd = ["npx", "jest", "--no-coverage"]
-    else:
-        cmd = ["npx", "ng", "test", "--no-watch", "--no-progress"]
     result = subprocess.run(
-        cmd, cwd=app_dir, capture_output=True, text=True, timeout=300,
+        ["npx", "ng", "test", "--no-watch", "--no-progress"],
+        cwd=app_dir, capture_output=True, text=True, timeout=300,
     )
     combined = result.stdout + result.stderr
     # Strip ANSI escape codes so matching works regardless of terminal colour
     import re as _re
     _ansi = _re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
     clean = _ansi.sub("", combined)
-    # Capture failing test identifiers across common runners:
-    #   pytest:  "FAILED tests/unit/test_foo.py::test_bar"
-    #   jest:    "FAIL src/app/foo.spec.ts"
-    #   ng/karma: "FAIL <project> <path>.spec.ts"
+    # Capture Vitest FAIL lines (contain "FAIL" and a spec file path)
+    # and legacy Karma FAILED lines. Summary lines ("Tests 221 failed") are
+    # excluded because they don't contain ".spec.ts".
     failed_lines = sorted({
         ln.strip() for ln in clean.splitlines()
         if ln.strip()
         and ("FAILED" in ln or "FAIL" in ln)
-        and any(ext in ln for ext in (".py::", ".spec.ts", ".test.ts", ".test.js"))
+        and (".spec.ts" in ln or ".test.ts" in ln)
     })
     baseline_file.write_text("\n".join(failed_lines))
     print(f"  Baseline captured: {len(failed_lines)} pre-existing failing test(s)")
-
-
-def _is_greenfield(config: dict) -> bool:
-    """Return True when pipeline.mode is 'greenfield' in CLAUDE.md."""
-    return config.get("pipeline", {}).get("mode", "").lower() == "greenfield"
-
-
-def _init_app_greenfield(config: dict) -> None:
-    """
-    Initialise ./app as an empty directory for a greenfield project.
-
-    In greenfield mode there is no existing repository to clone — agents will
-    scaffold the entire application from scratch. Keeps existing content when
-    resuming a previously started greenfield run.
-    """
-    target = config.get("target_repo") or {}
-    path = REPO_ROOT / target.get("local_path", "app")
-
-    if path.exists() and any(path.iterdir()):
-        print(f"  ./app already contains files — keeping existing content (greenfield resume)")
-        return
-
-    path.mkdir(parents=True, exist_ok=True)
-    print(f"  Created empty ./app — agents will scaffold the project from scratch")
 
 
 def _sync_app_repo(config: dict) -> None:
@@ -716,16 +703,12 @@ def _restore_test_suite() -> int:
     src = REPO_ROOT / "test-suite"
     dst = REPO_ROOT / "app" / "tests"
 
-    _TEST_GLOBS = ["*.py", "*.ts", "*.js", "*.go"]
-
-    if not src.exists() or not any(
-        f for g in _TEST_GLOBS for f in src.rglob(g)
-    ):
+    if not src.exists() or not any(src.rglob("*.py")):
         print("  No persisted test suite found — Tester will create one from scratch")
         return 0
 
     _mirror_directory(src=src, dst=dst)
-    count = sum(1 for g in _TEST_GLOBS for _ in src.rglob(g))
+    count = sum(1 for _ in src.rglob("*.py"))
     print(f"  Restored {count} test file(s) from test-suite/ → app/tests/")
     return count
 
@@ -741,15 +724,12 @@ def _save_test_suite() -> None:
     src = REPO_ROOT / "app" / "tests"
     dst = REPO_ROOT / "test-suite"
 
-    _TEST_GLOBS = ["*.py", "*.ts", "*.js", "*.go"]
-    if not src.exists() or not any(
-        f for g in _TEST_GLOBS for f in src.rglob(g)
-    ):
+    if not src.exists() or not any(src.rglob("*.py")):
         print("  No test files found in app/tests/ — nothing to persist")
         return
 
     _mirror_directory(src=src, dst=dst)
-    count = sum(1 for g in _TEST_GLOBS for _ in src.rglob(g))
+    count = sum(1 for _ in src.rglob("*.py"))
     print(f"  Persisted {count} test file(s) from app/tests/ → test-suite/")
 
 
@@ -853,7 +833,7 @@ def _record_target_repo(config: dict) -> None:
 
 def _init_rag(config: dict) -> tuple[Retriever | None, VectorStore | None]:
     """
-    Initialise the RAG pipeline from CLAUDE.md config.
+    Initialise the RAG pipeline from AGENTS.md config.
 
     Returns (retriever, store). Both are None if RAG is unavailable.
     Returning the store avoids a second store_from_config() call in the
@@ -926,13 +906,13 @@ def _init_rag(config: dict) -> tuple[Retriever | None, VectorStore | None]:
 
 def _read_config() -> dict:
     # Try both casings — Linux (GitHub Actions) is case-sensitive.
-    for _name in ("CLAUDE.md", "claude.md"):
-        claude_md = REPO_ROOT / _name
-        if claude_md.exists():
+    for _name in ("AGENTS.md", "AGENTS.md"):
+        agents_md = REPO_ROOT / _name
+        if agents_md.exists():
             break
     else:
         return {}
-    content = claude_md.read_text()
+    content = agents_md.read_text()
     match   = re.search(r"```yaml\n([\s\S]*?)```", content)
     if not match:
         return {}
@@ -1041,12 +1021,35 @@ def _create_pr(summary: str) -> None:
         f"git push --force-with-lease origin HEAD:{branch}",
         # Ensure the label exists before referencing it (idempotent)
         'gh label create "ai-generated" --color "0075ca" --description "Generated by AI pipeline" --force',
-        # Open a PR if one does not already exist; --head is explicit so gh
-        # does not infer the wrong source branch from a detached-HEAD checkout.
-        f'gh pr create --title "🤖 [AI] {pr_title}" --body-file sdlc/pipeline-summary.md --base main --head {branch} --label ai-generated',
     ]
     for cmd in cmds:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if result.stdout.strip():
+            print(f"  {result.stdout.strip()}")
+        if result.returncode != 0 and result.stderr.strip():
+            print(f"  ⚠️  {result.stderr.strip()}")
+
+    # Create PR or update the gate draft PR if one already exists
+    pr_check = subprocess.run(
+        f"gh pr view {branch} --json state --jq '.state' 2>/dev/null",
+        shell=True, capture_output=True, text=True,
+    )
+    pr_exists = pr_check.returncode == 0 and pr_check.stdout.strip()
+    if pr_exists:
+        for cmd in [
+            f'gh pr edit {branch} --title "🤖 [AI] {pr_title}" --body-file sdlc/pipeline-summary.md',
+            f'gh pr ready {branch}',
+        ]:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.stdout.strip():
+                print(f"  {result.stdout.strip()}")
+            if result.returncode != 0 and result.stderr.strip():
+                print(f"  ⚠️  {result.stderr.strip()}")
+    else:
+        result = subprocess.run(
+            f'gh pr create --title "🤖 [AI] {pr_title}" --body-file sdlc/pipeline-summary.md --base main --head {branch} --label ai-generated',
+            shell=True, capture_output=True, text=True,
+        )
         if result.stdout.strip():
             print(f"  {result.stdout.strip()}")
         if result.returncode != 0 and result.stderr.strip():
@@ -1152,6 +1155,125 @@ def _create_clarification_pr(intent_title: str) -> None:
             f'--remove-label "in-build" --add-label "needs-clarification"',
             shell=True
         )
+
+
+def _create_gate_pr(intent: str, stage: str) -> None:
+    """
+    Commit SDLC artifacts to a review/* branch, open a PR targeting the feature
+    branch (not main), and pause the pipeline.  main is never touched until the
+    full pipeline completes.
+
+    Resume path: merge the PR into the feature branch — the pull_request.closed
+    workflow trigger re-runs the orchestrator, which reloads the checkpoint and
+    skips already-completed stages.
+    """
+    GATE_ARTIFACTS = [
+        "app/",
+        "sdlc/",
+        "test-suite/",
+        "memory/runs/",
+        "memory/architecture-decisions.md",
+        "memory/project-overview.md",
+        "memory/patterns/api-conventions.md",
+        "memory/patterns/error-handling.md",
+        "memory/patterns/rejection-patterns.md",
+        "intent.md",
+        "context/run-snapshot.md",
+    ]
+    existing = [p for p in GATE_ARTIFACTS if (REPO_ROOT / p.rstrip("/")).exists()]
+    if not existing:
+        print("  ⚠️  No artifacts found — skipping gate PR creation")
+        return
+
+    branch = _resolve_feature_branch()
+    title  = _first_line(intent)
+    stage_label = {
+        "after_design":      "design",
+        "after_code_review": "code review",
+        "after_qa_review":   "QA review",
+    }.get(stage, stage)
+
+    # Review branch: review/{stage-label}/{feature-slug}
+    # Branched off the feature branch; PR targets the feature branch (not main).
+    # Merging the PR is what resumes the pipeline — no label needed.
+    feature_slug   = re.sub(r"^feature/", "", branch)
+    review_branch  = f"review/{stage_label.replace(' ', '-')}/{feature_slug}"
+
+    pr_body = (
+        f"## 🔍 AI pipeline paused — {stage_label} gate\n\n"
+        f"The pipeline has completed the **{stage_label}** stage "
+        f"and is awaiting your review before continuing.\n\n"
+        f"### What to review\n"
+        f"- `sdlc/design.md` — technical design\n"
+        f"- `sdlc/code-review.md` — automated code review findings\n"
+        f"- `sdlc/build-summary.md` — implementation notes\n"
+        f"- `app/` — generated application code\n\n"
+        f"### To continue the pipeline\n"
+        f"**Merge this PR** into `{branch}`. "
+        f"The merge will automatically trigger the pipeline to resume from the "
+        f"**{stage_label}** checkpoint and proceed through the remaining stages.\n\n"
+        f"### To reject\n"
+        f"Close this PR without merging. The pipeline will not resume.\n\n"
+        f"---\n_Gate: `{stage}` · review branch: `{review_branch}` · "
+        f"checkpoint saved in `sdlc/`_\n"
+    )
+    pr_body_path = REPO_ROOT / "sdlc" / "gate-pr-body.md"
+    pr_body_path.write_text(pr_body)
+
+    def _r(cmd: str) -> subprocess.CompletedProcess:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if r.stdout.strip():
+            print(f"  {r.stdout.strip()}")
+        if r.returncode != 0 and r.stderr.strip():
+            print(f"  ⚠️  {r.stderr.strip()}")
+        return r
+
+    _r('git config user.name "Claude AI 🤖"')
+    _r('git config user.email "claude-sdlc@anthropic.com"')
+    # Push the feature branch to GitHub first so it exists as the PR base.
+    # The feature branch is only created locally by the workflow's "Fetch intent"
+    # step and is never independently pushed, so GitHub doesn't know about it yet.
+    _r(f"git checkout -b {branch} 2>/dev/null || git checkout {branch}")
+    _r(f"git push origin HEAD:{branch}")
+    _r(f"git checkout -b {review_branch}")
+    _r(f"git add -- {' '.join(existing)}")
+    _r(f'git diff --cached --quiet || git commit -m "🤖 [AI] {title[:65]} — gate: {stage_label}"')
+    _r(f"git push origin HEAD:{review_branch}")
+
+    _r('gh label create "in-review"    --color "e4e669" --description "Awaiting human review"     --force')
+    _r('gh label create "ai-generated" --color "0075ca" --description "Generated by AI pipeline"  --force')
+    _r(
+        f'gh pr create '
+        f'--title "🔍 [AI] {title[:62]}" '
+        f'--body-file sdlc/gate-pr-body.md '
+        f'--base {branch} --head {review_branch} --label ai-generated'
+    )
+
+    pr_url_r = subprocess.run(
+        f"gh pr view {review_branch} --json url --jq '.url'",
+        shell=True, capture_output=True, text=True,
+    )
+    pr_url = pr_url_r.stdout.strip() if pr_url_r.returncode == 0 else ""
+
+    issue_number = os.environ.get("ISSUE_NUMBER", "")
+    if issue_number:
+        comment_path = REPO_ROOT / "sdlc" / "gate-comment.md"
+        comment_path.write_text(
+            f"⏸️ Pipeline paused at **{stage_label}** gate.\n\n"
+            f"Review the PR{f': {pr_url}' if pr_url else ''} "
+            f"(`{review_branch}` → `{branch}`) "
+            f"then **merge it** to resume the pipeline.\n\n"
+            f"_To reject: close the PR without merging._"
+        )
+        subprocess.run(
+            f"gh issue comment {issue_number} --body-file sdlc/gate-comment.md",
+            shell=True,
+        )
+        subprocess.run(
+            f"gh issue edit {issue_number} --remove-label in-build --add-label in-review",
+            shell=True,
+        )
+    print(f"\n  PR created. Pipeline paused at {stage_label} gate.")
 
 
 def _effective_input(inp: int, cr: int, cc: int) -> int:
@@ -1360,26 +1482,24 @@ def _init_project_overview(memory: "MemoryManager", config: dict) -> None:
     Write project-overview.md on first pipeline run from config-derived facts.
     Skipped on subsequent runs (init_project_overview is a no-op when the file exists).
     """
-    stack      = config.get("pipeline", {}).get("context", {}).get("stack") or {}
-    target     = config.get("target_repo") or {}
-    greenfield = _is_greenfield(config)
-    repo       = target.get("repo", "(new project)" if greenfield else "unknown")
-    branch     = target.get("branch", "N/A" if greenfield else "main")
-    mode_line  = "\n## Mode\nGreenfield — building from scratch\n" if greenfield else ""
+    stack  = config.get("pipeline", {}).get("context", {}).get("stack") or {}
+    target = config.get("target_repo") or {}
+    repo   = target.get("repo", "unknown")
+    branch = target.get("branch", "main")
 
     content = f"""# Project overview
-{mode_line}
+
 ## Target repository
 - **Repo:** {repo} (branch: `{branch}`)
 - **Local path:** {target.get("local_path", "./app")}
 
 ## Tech stack
-- **Language:** {stack.get("language", "unknown")}
-- **Framework:** {stack.get("framework", "unknown")}
-- **Runtime:** {stack.get("runtime", "unknown")}
-- **Test framework:** {stack.get("test_framework", "unknown")}
-- **Auth:** {stack.get("auth", "unknown")}
-- **Deployment:** {stack.get("deployment", "unknown")}
+- **Language:** {stack.get("language", "typescript")}
+- **Framework:** {stack.get("framework", "angular")}
+- **Runtime:** {stack.get("runtime", "node20")}
+- **Test framework:** {stack.get("test_framework", "jasmine/karma")}
+- **Backend:** {stack.get("backend", "spring-petclinic-rest")}
+- **Deployment:** {stack.get("deployment", "azure_container_apps")}
 
 ## Notes
 _Add permanent project context here that agents should always be aware of._

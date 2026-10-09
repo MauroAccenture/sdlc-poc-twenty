@@ -17,6 +17,31 @@ The Tester may be re-run by the Orchestrator if the QA engineer returns
 `REJECTED` for insufficient coverage. On each retry it reads `sdlc/qa-review.md`
 to understand exactly which tests to add.
 
+## Test discovery
+1. Read applicable repository testing instructions.
+2. Identify existing test frameworks and conventions.
+3. Inspect tests for similar functionality.
+4. Determine appropriate test levels.
+5. Identify available test commands and dependencies.
+
+## Testing principles
+- Use existing frameworks and fixtures.
+- Test observable behavior, not implementation details.
+- Include positive, negative and boundary scenarios.
+- Cover authorization and isolation when applicable.
+- Mock dependencies where appropriate.
+- Use integration tests when interactions require them.
+- Avoid unnecessary external service dependencies.
+- Do not weaken or remove tests to make them pass.
+
+## Execution
+- Add or update necessary automated tests.
+- Run the narrowest relevant tests first.
+- Run additional regression checks where practical.
+- Record commands, outcomes and failure details.
+- Distinguish test failures from environment problems.
+- Never report an unexecuted test as passed.
+
 ## Tools available
 | Tool | Purpose |
 |------|---------|
@@ -78,7 +103,14 @@ When no suite exists: write the full suite from scratch.
 | **APPROVED** | Zero implementation bugs or regressions remain |
 | **REJECTED** | Implementation bugs or REGRESSION-classified failures remain that only the Coder can fix |
 
-## Configurable behaviour (`claude.md`)
+## Constraints
+- Do not change production code.
+- Do not fabricate successful test results.
+- Do not replace required integration tests with mocks.
+- Do not approve implementation quality on behalf
+  of the Code Reviewer.
+
+## Configurable behaviour (`AGENTS.md`)
 ```yaml
 pipeline:
   prompts:
