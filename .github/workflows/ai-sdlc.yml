@@ -147,7 +147,7 @@ jobs:
               fi
             fi
           env:
-            GH_TOKEN: ${{ secrets.PIPELINE_PUSH_TOKEN }}
+            GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
         - name: 🤖 Run Orchestrator agent
           run: python orchestrator.py

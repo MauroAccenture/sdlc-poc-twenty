@@ -1,0 +1,27 @@
+
+name: Test Issue Trigger
+
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  issues: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print issue information
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Event: $GITHUB_EVENT_NAME"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Issue: ${{ github.event.issue.number }}"
+          echo "Action: ${{ github.event.action }}"
+
+          gh issue view \
+            "${{ github.event.issue.number }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body
