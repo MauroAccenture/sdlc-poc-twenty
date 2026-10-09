@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-SDLC Greenfield · Execution Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#060d18;--surface:rgba(14,22,38,0.85);--surface2:rgba(20,30,52,0.9);
+  --border:rgba(99,140,255,0.1);--border-hi:rgba(99,140,255,0.28);
+  --text:#e2e8f0;--muted:#718096;--faint:#3d4f6b;
+  --accent:#6366f1;--glow:rgba(99,102,241,0.22);
+  --green:#10b981;--green-bg:rgba(16,185,129,0.12);--green-b:rgba(16,185,129,0.25);
+  --red:#ef4444;  --red-bg:rgba(239,68,68,0.12);  --red-b:rgba(239,68,68,0.25);
+  --yellow:#f59e0b;--blue:#3b82f6;--purple:#8b5cf6;
+  --font:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',monospace
+}
+html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.5}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(99,102,241,0.13) 0%,transparent 60%),
+             radial-gradient(ellipse 45% 35% at 85% 85%,rgba(16,185,129,0.07) 0%,transparent 55%),
+             radial-gradient(ellipse 40% 30% at 5%  65%,rgba(59,130,246,0.07) 0%,transparent 50%)}
+
+/* ── Config modal ───────────────────────────────────────────────── */
+#cfg-overlay{display:none;position:fixed;inset:0;background:rgba(4,9,20,0.92);
+  backdrop-filter:blur(10px);z-index:999;align-items:center;justify-content:center}
+#cfg-overlay.on{display:flex}
+.cfg-card{background:rgba(14,22,38,0.97);border:1px solid var(--border-hi);border-radius:18px;
+  padding:44px;width:460px;max-width:94vw;box-shadow:0 0 80px rgba(99,102,241,0.18)}
+.cfg-card h2{font-size:1.35rem;font-weight:700;margin-bottom:6px;
+  background:linear-gradient(135deg,#818cf8,#38bdf8);-webkit-background-clip:text;
+  -webkit-text-fill-color:transparent}
+.cfg-card p{color:var(--muted);font-size:.82rem;margin-bottom:26px;line-height:1.6}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:.72rem;font-weight:600;color:var(--muted);
+  margin-bottom:5px;text-transform:uppercase;letter-spacing:.06em}
+.field input{width:100%;background:rgba(4,9,20,.8);border:1px solid var(--border-hi);
+  border-radius:8px;padding:10px 14px;color:var(--text);font-family:var(--mono);
+  font-size:.82rem;outline:none;transition:border-color .2s,box-shadow .2s}
+.field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--glow)}
+.btn-primary{width:100%;background:linear-gradient(135deg,var(--accent),var(--blue));
+  border:none;border-radius:8px;padding:12px;color:#fff;font-weight:600;font-size:.88rem;
+  cursor:pointer;margin-top:6px;transition:opacity .2s,transform .1s}
+.btn-primary:hover{opacity:.88;transform:translateY(-1px)}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+#app{position:relative;z-index:1;min-height:100vh}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+header{padding:18px 32px;border-bottom:1px solid var(--border);display:flex;
+  align-items:center;gap:14px;backdrop-filter:blur(22px);
+  background:rgba(6,13,24,.55);position:sticky;top:0;z-index:100}
+.logo{width:34px;height:34px;border-radius:8px;flex-shrink:0;display:flex;
+  align-items:center;justify-content:center;font-size:1rem;
+  background:linear-gradient(135deg,var(--accent),var(--blue))}
+.hdr-title{flex:1}
+.hdr-title h1{font-size:.95rem;font-weight:600;letter-spacing:-.01em}
+.hdr-sub{font-size:.73rem;color:var(--muted);font-family:var(--mono);margin-top:1px}
+.hdr-actions{display:flex;gap:8px}
+.btn-icon{background:rgba(99,102,241,.08);border:1px solid var(--border);border-radius:7px;
+  padding:7px 13px;color:var(--muted);font-size:.78rem;cursor:pointer;
+  display:flex;align-items:center;gap:5px;transition:all .18s}
+.btn-icon:hover{border-color:var(--accent);color:var(--text);background:var(--glow)}
+
+/* ── Stats bar ──────────────────────────────────────────────────── */
+.stats-bar{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;
+  background:var(--border);border-bottom:1px solid var(--border)}
+.stat{background:rgba(6,13,24,.8);padding:18px 24px;text-align:center}
+.stat-v{font-size:1.75rem;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.stat-v.blue{color:var(--blue)}.stat-v.green{color:var(--green)}
+.stat-v.red{color:var(--red)}.stat-v.purple{color:var(--purple)}.stat-v.yellow{color:var(--yellow)}
+.stat-l{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+
+/* ── Filters ─────────────────────────────────────────────────────── */
+.filters{padding:16px 32px;display:flex;gap:10px;align-items:center;
+  border-bottom:1px solid var(--border);flex-wrap:wrap}
+.search-wrap{flex:1;min-width:180px;position:relative}
+.search-wrap input{width:100%;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:8px 12px 8px 34px;color:var(--text);font-size:.82rem;outline:none;
+  transition:border-color .18s}
+.search-wrap input:focus{border-color:var(--accent)}
+.search-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);
+  color:var(--faint);font-size:.8rem;pointer-events:none}
+.pill{background:var(--surface);border:1px solid var(--border);border-radius:20px;
+  padding:6px 14px;font-size:.77rem;color:var(--muted);cursor:pointer;
+  transition:all .18s;white-space:nowrap}
+.pill:hover,.pill.on{border-color:var(--accent);color:var(--text);background:var(--glow)}
+
+/* ── Grid ────────────────────────────────────────────────────────── */
+.grid-wrap{padding:24px 32px;max-width:1440px;margin:0 auto}
+.runs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(370px,1fr));gap:18px}
+
+/* ── Card ────────────────────────────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  overflow:hidden;transition:all .22s;cursor:pointer;backdrop-filter:blur(18px)}
+.card:hover{border-color:var(--border-hi);
+  box-shadow:0 0 28px rgba(99,102,241,.09),0 8px 28px rgba(0,0,0,.28);transform:translateY(-2px)}
+.card.expanded{grid-column:1/-1;cursor:default;border-color:var(--border-hi)}
+
+/* Card header */
+.card-hdr{padding:16px 18px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:flex-start;gap:12px}
+.dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:5px}
+.dot.success{background:var(--green);box-shadow:0 0 7px var(--green)}
+.dot.failure{background:var(--red);box-shadow:0 0 7px var(--red)}
+.dot.in_progress{background:var(--yellow);animation:pulse 1.4s infinite}
+.dot.cancelled,.dot.pending{background:var(--faint)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.card-info{flex:1;min-width:0}
+.feat-name{font-size:.9rem;font-weight:600;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;margin-bottom:5px}
+.branch-tag{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(99,102,241,.13);border:1px solid rgba(99,102,241,.28);
+  border-radius:11px;padding:2px 9px;font-family:var(--mono);font-size:.7rem;color:#818cf8;
+  text-decoration:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.branch-tag:hover{background:rgba(99,102,241,.22)}
+.card-meta{flex-shrink:0;text-align:right}
+.run-date{font-size:.72rem;color:var(--muted);font-family:var(--mono)}
+.run-dur{font-size:.68rem;color:var(--faint);margin-top:2px}
+
+/* Stage badges */
+.stages{display:flex;gap:5px;padding:12px 18px;flex-wrap:wrap}
+.sbadge{display:flex;align-items:center;gap:4px;padding:3px 9px;border-radius:5px;
+  font-size:.7rem;font-weight:500}
+.sbadge.ok{background:var(--green-bg);color:var(--green);border:1px solid var(--green-b)}
+.sbadge.fail{background:var(--red-bg);color:var(--red);border:1px solid var(--red-b)}
+.sbadge.skip{background:rgba(255,255,255,.03);color:var(--faint);border:1px solid var(--border)}
+
+/* Mini token bars */
+.mini-tokens{padding:2px 18px 12px}
+.tok-row{display:flex;align-items:center;gap:9px;padding:4px 0}
+.tok-lbl{font-size:.7rem;color:var(--muted);width:82px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tok-bar-bg{flex:1;height:5px;background:rgba(255,255,255,.05);border-radius:3px;overflow:hidden}
+.tok-bar{height:100%;border-radius:3px;transition:width .55s cubic-bezier(.4,0,.2,1)}
+.tok-num{font-size:.68rem;color:var(--muted);font-family:var(--mono);width:52px;text-align:right;flex-shrink:0}
+.tok-total-row{display:flex;justify-content:space-between;align-items:center;
+  padding:10px 18px;border-top:1px solid var(--border);background:rgba(0,0,0,.14)}
+.tok-total-lbl{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.tok-total-val{font-size:.82rem;font-weight:600;font-family:var(--mono);color:var(--accent)}
+
+/* Card actions */
+.card-acts{padding:10px 18px;display:flex;gap:7px;border-top:1px solid var(--border);flex-wrap:wrap}
+.btn-sm{padding:5px 11px;border-radius:6px;font-size:.74rem;cursor:pointer;
+  transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:4px;
+  background:transparent;border:1px solid var(--border);color:var(--muted)}
+.btn-sm:hover{border-color:var(--accent);color:var(--text);background:var(--glow)}
+
+/* ── Detail panel ────────────────────────────────────────────────── */
+.detail{padding:22px 18px;border-top:1px solid var(--border)}
+.verdict-banner{display:flex;align-items:center;gap:10px;padding:11px 15px;
+  border-radius:8px;margin-bottom:14px;font-weight:600;font-size:.83rem}
+.verdict-banner.ok{background:var(--green-bg);color:var(--green);border:1px solid var(--green-b)}
+.verdict-banner.fail{background:var(--red-bg);color:var(--red);border:1px solid var(--red-b)}
+.regr-note{font-size:.73rem;font-weight:400;opacity:.8;margin-left:4px}
+.test-counts{display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+.test-counts span{font-size:.82rem;font-weight:600}
+.tc-pass{color:var(--green)}.tc-fail{color:var(--red)}.tc-skip{color:var(--muted)}
+
+/* Tabs */
+.tabs{display:flex;gap:2px;background:rgba(0,0,0,.18);border-radius:8px;padding:3px;margin-bottom:16px}
+.tab-btn{flex:1;padding:6px 10px;border:none;background:transparent;color:var(--muted);
+  font-size:.76rem;font-weight:500;cursor:pointer;border-radius:6px;transition:all .15s;white-space:nowrap}
+.tab-btn.on{background:var(--surface2);color:var(--text)}
+.tab{display:none}.tab.on{display:block}
+
+/* Chart wrap */
+.chart-wrap{height:210px;position:relative;margin-bottom:8px}
+
+/* Markdown */
+.md{font-size:.79rem;line-height:1.65;color:var(--text);max-height:420px;overflow-y:auto;padding-right:4px}
+.md h1,.md h2{font-size:.87rem;font-weight:700;padding-bottom:4px;
+  border-bottom:1px solid var(--border);margin:12px 0 6px}
+.md h3{font-size:.8rem;font-weight:600;margin:10px 0 4px}
+.md p{margin:5px 0}.md code{font-family:var(--mono);background:rgba(255,255,255,.06);
+  padding:1px 5px;border-radius:4px;font-size:.75rem}
+.md hr{border:none;border-top:1px solid var(--border);margin:8px 0}
+.md table{width:100%;border-collapse:collapse;margin:8px 0;font-size:.75rem}
+.md th,.md td{padding:5px 9px;border:1px solid var(--border);text-align:left;vertical-align:top}
+.md th{background:rgba(99,102,241,.08);font-weight:600}
+.md ul{padding-left:18px;margin:5px 0}.md li{margin:2px 0}
+.md strong{font-weight:600}
+.md em{color:var(--muted);font-style:italic}
+
+/* Loading / empty */
+.loading,.empty{text-align:center;padding:72px 20px;color:var(--muted);grid-column:1/-1}
+.spinner{width:34px;height:34px;border:2px solid var(--border);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty-icon{font-size:2.2rem;margin-bottom:10px}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px}
+
+@media(max-width:760px){
+  header{padding:14px 16px}
+  .stats-bar{grid-template-columns:repeat(3,1fr)}
+  .filters{padding:12px 16px}
+  .grid-wrap{padding:14px 16px}
+  .runs-grid{grid-template-columns:1fr}
+  .stat-v{font-size:1.4rem}
+}
+</style>
+</head>
+<body>
+
+<!-- Config modal -->
+<div id="cfg-overlay">
+  <div class="cfg-card">
+    <h2>🤖 Connect Dashboard</h2>
+    <p>Provide a GitHub Personal Access Token with <code>repo</code> and <code>actions:read</code> scopes, and the pipeline repository slug.</p>
+    <div class="field"><label>GitHub Token</label>
+      <input type="password" id="cfg-token" placeholder="ghp_…"></div>
+    <div class="field"><label>Repository (owner/repo)</label>
+      <input type="text" id="cfg-repo" placeholder="MauroAccenture/sdlc-poc-greenfield"></div>
+    <button class="btn-primary" onclick="saveConfig()">Connect →</button>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <header>
+    <div class="logo">🤖</div>
+    <div class="hdr-title">
+      <h1>AI-SDLC Execution Dashboard</h1>
+      <div class="hdr-sub" id="repo-lbl">—</div>
+    </div>
+    <div class="hdr-actions">
+      <button class="btn-icon" onclick="load()">↻ Refresh</button>
+      <button class="btn-icon" onclick="openCfg()">⚙ Config</button>
+    </div>
+  </header>
+
+  <div class="stats-bar">
+    <div class="stat"><div class="stat-v blue"  id="s-runs">—</div><div class="stat-l">Runs</div></div>
+    <div class="stat"><div class="stat-v green"  id="s-ok">—</div><div class="stat-l">QA Approved</div></div>
+    <div class="stat"><div class="stat-v red"    id="s-fail">—</div><div class="stat-l">QA Rejected</div></div>
+    <div class="stat"><div class="stat-v purple" id="s-tok">—</div><div class="stat-l">Total Tokens</div></div>
+    <div class="stat"><div class="stat-v yellow" id="s-api">—</div><div class="stat-l">API Calls</div></div>
+  </div>
+
+  <div class="filters">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="q" placeholder="Search branch or feature…" oninput="render()">
+    </div>
+    <button class="pill on" onclick="setF('all',this)">All</button>
+    <button class="pill"    onclick="setF('success',this)">✅ Success</button>
+    <button class="pill"    onclick="setF('failure',this)">❌ Failed</button>
+    <button class="pill"    onclick="setF('in_progress',this)">⏳ Running</button>
+  </div>
+
+  <div class="grid-wrap">
+    <div class="runs-grid" id="grid">
+      <div class="loading"><div class="spinner"></div>Loading…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+let cfg={token:'',owner:'',repo:''};
+let runs=[], arts={}, filter='all', expanded=null;
+const charts={};
+// arts is keyed by run.id — each run gets its own data parsed from its artifact ZIP
+
+const COLORS={
+  'Designer':'#6366f1','Coder':'#3b82f6',
+  'Code reviewer':'#8b5cf6','Tester':'#10b981','QA engineer':'#f59e0b'
+};
+
+// ── Config ─────────────────────────────────────────────────────────
+function loadCfg(){
+  const s=JSON.parse(localStorage.getItem('sdlc-dash')||'{}');
+  if(s.token&&s.repo){cfg=parseRepo(s);return true}return false
+}
+function parseRepo(s){
+  const[owner,repo]=(s.repo||'').split('/');
+  return{token:s.token,owner:owner||'',repo:repo||''}
+}
+function saveConfig(){
+  const t=document.getElementById('cfg-token').value.trim();
+  const r=document.getElementById('cfg-repo').value.trim();
+  if(!t||!r){alert('Both fields required');return}
+  localStorage.setItem('sdlc-dash',JSON.stringify({token:t,repo:r}));
+  cfg=parseRepo({token:t,repo:r});
+  document.getElementById('cfg-overlay').classList.remove('on');
+  load()
+}
+function openCfg(){
+  document.getElementById('cfg-token').value=cfg.token;
+  document.getElementById('cfg-repo').value=`${cfg.owner}/${cfg.repo}`;
+  document.getElementById('cfg-overlay').classList.add('on')
+}
+
+// ── GitHub API ─────────────────────────────────────────────────────
+async function gh(path){
+  const r=await fetch(`https://api.github.com${path}`,{
+    headers:{'Authorization':`Bearer ${cfg.token}`,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}
+  });
+  if(!r.ok)throw new Error(`${r.status} ${path}`);
+  return r.json()
+}
+// Read a file from the repo at a specific git ref (branch name or commit SHA)
+async function ghFile(ref,file){
+  try{
+    const d=await gh(`/repos/${cfg.owner}/${cfg.repo}/contents/sdlc/${file}?ref=${encodeURIComponent(ref)}`);
+    return decodeURIComponent(atob(d.content.replace(/\n/g,'')).split('').map(c=>'%'+c.charCodeAt(0).toString(16).padStart(2,'0')).join(''))
+  }catch{return null}
+}
+
+// ── Load ───────────────────────────────────────────────────────────
+async function load(){
+  document.getElementById('repo-lbl').textContent=`${cfg.owner}/${cfg.repo}`;
+  grid('<div class="loading"><div class="spinner"></div>Fetching runs…</div>');
+  arts={};
+  try{
+    // Find workflow
+    const wfs=await gh(`/repos/${cfg.owner}/${cfg.repo}/actions/workflows`);
+    const wf=wfs.workflows.find(w=>w.path.includes('ai-sdlc'));
+    const qs=wf?`workflow_id=${wf.id}&`:'';
+    const data=await gh(`/repos/${cfg.owner}/${cfg.repo}/actions/runs?${qs}per_page=50`);
+    runs=data.workflow_runs||[];
+
+    // Load per-run: check if sdlc-artifacts was uploaded, then fetch sdlc/ files
+    await Promise.allSettled(runs.slice(0,30).map(loadRun));
+
+    updateStats();render()
+  }catch(e){
+    grid(`<div class="empty"><div class="empty-icon">⚠️</div>
+      <div style="font-weight:600;margin-bottom:6px">Failed to load</div>
+      <div style="font-size:.78rem;color:var(--faint)">${e.message}</div><br>
+      <button class="btn-sm" onclick="openCfg()">Check config</button></div>`)
+  }
+}
+
+// Issue-triggered runs execute on main, but commits go to a feature branch
+// derived from the issue title. Reconstruct that branch name the same way
+// the workflow does: feature/<ascii-downcase, non-alnum→dash>.
+function featureBranch(r){
+  const raw=(r.display_title||'').trim();
+  if(raw){
+    const slug=raw.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+    if(slug)return`feature/${slug}`;
+  }
+  return r.head_branch||'main'; // fallback for workflow_dispatch or unknown
+}
+
+// Find the commit on this run's feature branch that wrote sdlc/token-usage.md.
+// If none exists the run made no LLM calls → null.
+async function loadRun(r){
+  try{
+    const branch=featureBranch(r);
+    const since=r.run_started_at||r.created_at;
+    const until=new Date(new Date(r.updated_at).getTime()+20*60*1000).toISOString();
+    const commits=await gh(
+      `/repos/${cfg.owner}/${cfg.repo}/commits`+
+      `?sha=${encodeURIComponent(branch)}`+
+      `&path=sdlc/token-usage.md`+
+      `&since=${since}&until=${until}&per_page=5`
+    );
+    if(!commits.length){arts[r.id]=null;return}
+    // Pick the commit whose timestamp is closest to r.updated_at.
+    // For back-to-back runs on the same branch the wide search window can
+    // return the next run's commit too — but this run's commit is always
+    // the one temporally nearest to when THIS run finished.
+    const runEnd=new Date(r.updated_at).getTime();
+    const match=commits
+      .map(c=>({sha:c.sha,diff:Math.abs(new Date(c.commit.committer?.date||c.commit.author?.date).getTime()-runEnd)}))
+      .sort((a,b)=>a.diff-b.diff)[0];
+    if(!match){arts[r.id]=null;return}
+    const sha=match.sha;
+    const[tok,ps,qa,cr,tr,intent]=await Promise.all([
+      ghFile(sha,'token-usage.md'),ghFile(sha,'pipeline-summary.md'),
+      ghFile(sha,'qa-review.md'),ghFile(sha,'code-review.md'),ghFile(sha,'test-results.md'),
+      ghFile(sha,'intent.md'),
+    ]);
+    arts[r.id]={tokenUsage:parseTok(tok),summary:parsePS(ps),qa:parseQA(qa),
+      cr:parseCR(cr),tr:parseTR(tr),intent:intent||'',raw:{tok,ps,qa,cr,tr,intent}};
+  }catch{arts[r.id]=null}
+}
+
+// ── Parsers ────────────────────────────────────────────────────────
+function pn(s){return parseInt((s||'').replace(/[^\d]/g,''),10)||0}
+
+function parseTok(md){
+  if(!md)return null;
+  const agents=[],sep=/^[\s|:-]+$/;
+  let totals=null;
+  for(const line of md.split('\n')){
+    const p=line.split('|').map(s=>s.trim()).filter((_,i,a)=>i>0&&i<a.length-1);
+    if(p.length<6)continue;
+    const name=p[0].replace(/\*\*/g,'').trim();
+    if(!name||sep.test(name)||name==='Agent')continue;
+    // With cache columns the table has 10 cols; without it has 7.
+    const c=p.length>=10;
+    if(name==='TOTAL'){
+      totals={calls:pn(p[1]),input:pn(p[2]),output:pn(p[3]),total:pn(p[4]),
+        cacheRead:c?pn(p[5]):0,cacheWrite:c?pn(p[6]):0,
+        effInput:c?pn(p[7]):pn(p[2])};
+      continue;
+    }
+    agents.push({name,calls:pn(p[1]),input:pn(p[2]),output:pn(p[3]),total:pn(p[4]),
+      cacheRead:c?pn(p[5]):0,cacheWrite:c?pn(p[6]):0,
+      effInput:c?pn(p[7]):pn(p[2]),
+      peak:pn(c?p[8]:p[5]),peakPct:parseFloat(((c?p[9]:p[6])||'').replace('%',''))||0})
+  }
+  return{agents,totals}
+}
+
+function parsePS(md){
+  if(!md)return null;
+  const feat=(md.match(/AI-generated feature:\s*(.+)/)||[])[1]?.trim()||'Pipeline run';
+  const crBlk=(md.split('### Code review')[1]||'').split('###')[0];
+  const tBlk =(md.split('### Tests')[1]||'').split('###')[0];
+  const qaBlk=(md.split('### QA')[1]||'').split('###')[0];
+  return{
+    feat,
+    crOk:/✅\s*approved/i.test(crBlk),
+    tOk:/APPROVED/i.test(tBlk)&&!/REJECTED/i.test(tBlk),
+    qaOk:/✅\s*approved/i.test(qaBlk)
+  }
+}
+
+function parseQA(md){
+  if(!md)return null;
+  const v=(md.match(/^## Verdict\s*\n+(\w+)/m)||[])[1]?.trim().toUpperCase()||'';
+  const r=(md.match(/^## Regression verdict\s*\n+([^\n]+)/m)||[])[1]?.trim()||'';
+  return{verdict:v,regr:r}
+}
+function parseCR(md){
+  if(!md)return null;
+  return{verdict:(md.match(/^## Verdict\s*\n+(\w+)/m)||[])[1]?.trim().toUpperCase()||''}
+}
+function parseTR(md){
+  if(!md)return null;
+  const m=md.match(/Passed:\s*(\d+)\s*\|\s*Failed:\s*(\d+)\s*\|\s*Skipped:\s*(\d+)/i);
+  return m?{passed:+m[1],failed:+m[2],skipped:+m[3]}:null
+}
+
+// ── Stats ──────────────────────────────────────────────────────────
+function fmtN(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?Math.round(n/1e3)+'K':String(n)}
+function fmtDate(iso){
+  const d=new Date(iso);
+  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' '+
+         d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+}
+function fmtDur(a,b){
+  if(!a||!b)return'';const ms=new Date(b)-new Date(a),m=Math.floor(ms/60000),s=Math.floor((ms%60000)/1000);
+  return m?`${m}m ${s}s`:`${s}s`
+}
+
+function updateStats(){
+  let ok=0,fail=0,tok=0,api=0;
+  for(const r of runs){
+    const a=arts[r.id];
+    if(!a)continue;
+    if(a.qa?.verdict==='APPROVED')ok++;
+    if(a.qa?.verdict==='REJECTED')fail++;
+    tok+=a.tokenUsage?.totals?.total||0;
+    api+=a.tokenUsage?.totals?.calls||0;
+  }
+  document.getElementById('s-runs').textContent=runs.filter(r=>arts[r.id]).length||'—';
+  document.getElementById('s-ok').textContent=ok||'—';
+  document.getElementById('s-fail').textContent=fail||'—';
+  document.getElementById('s-tok').textContent=tok?fmtN(tok):'—';
+  document.getElementById('s-api').textContent=api?fmtN(api):'—';
+}
+
+// ── Filter ─────────────────────────────────────────────────────────
+function setF(f,el){
+  filter=f;
+  document.querySelectorAll('.pill').forEach(p=>p.classList.remove('on'));
+  el.classList.add('on');render()
+}
+function visible(){
+  const q=(document.getElementById('q')?.value||'').toLowerCase();
+  return runs.filter(r=>{
+    if(!arts[r.id])return false; // null = no LLM calls; undefined = not fetched yet
+    if(filter==='success'&&r.conclusion!=='success')return false;
+    if(filter==='failure'&&r.conclusion!=='failure')return false;
+    if(filter==='in_progress'&&r.status!=='in_progress')return false;
+    if(q){const b=(r.head_branch||'').toLowerCase(),f=(arts[r.id]?.summary?.feat||'').toLowerCase();
+      if(!b.includes(q)&&!f.includes(q))return false}
+    return true
+  })
+}
+
+// ── Render ─────────────────────────────────────────────────────────
+function grid(html){document.getElementById('grid').innerHTML=html}
+function render(){
+  const rs=visible();
+  if(!rs.length){grid('<div class="empty"><div class="empty-icon">🔍</div>No runs match filter</div>');return}
+  document.getElementById('grid').innerHTML=rs.map(cardHtml).join('');
+  setTimeout(()=>rs.forEach(r=>{
+    const a=arts[r.id];
+    if(a?.tokenUsage?.agents?.length)drawBars(r.id,a.tokenUsage);
+    if(expanded===r.id&&a?.tokenUsage?.agents?.length)drawChart(r.id,a.tokenUsage);
+  }),0)
+}
+
+function stCls(r){return r.status==='in_progress'?'in_progress':r.conclusion||'pending'}
+
+function stages(runId){
+  const a=arts[runId];
+  if(!a?.summary&&!a?.qa)return`<div class="stages"><span style="font-size:.7rem;color:var(--faint)">No artifacts for this run</span></div>`;
+  const s=a.summary,cr=a.cr,tr=a.tr,qa=a.qa;
+  const items=[
+    {lbl:'Design',ok:!!s},
+    {lbl:'Code Review',ok:cr?.verdict==='APPROVED'},
+    {lbl:'Tests',ok:s?.tOk!=null?s.tOk:(tr?tr.failed===0:null)},
+    {lbl:'QA',ok:qa?.verdict==='APPROVED'}
+  ];
+  return`<div class="stages">${items.map(i=>{
+    const c=i.ok===true?'ok':i.ok===false?'fail':'skip';
+    const ic=c==='ok'?'✓':c==='fail'?'✗':'·';
+    return`<span class="sbadge ${c}">${ic} ${i.lbl}</span>`
+  }).join('')}</div>`
+}
+
+function tokBlock(runId){
+  const a=arts[runId];
+  if(!a?.tokenUsage?.agents?.length)return`<div style="padding:10px 18px;font-size:.72rem;color:var(--faint)">${arts[runId]===null?'No LLM calls — 0 tokens':'Awaiting artifact data…'}</div>`;
+  return`<div class="mini-tokens" id="bars-${runId}"></div>
+    <div class="tok-total-row">
+      <span class="tok-total-lbl">Total tokens</span>
+      <span class="tok-total-val">${fmtN(a.tokenUsage.totals?.total||0)}</span>
+    </div>`
+}
+
+function cardHtml(r){
+  const b=featureBranch(r);
+  const a=arts[r.id];
+  const feat=a?.summary?.feat||r.head_commit?.message?.split('\n')[0]||'Pipeline run';
+  const sc=stCls(r);
+  const dur=fmtDur(r.run_started_at||r.created_at,r.updated_at);
+  const isExp=expanded===r.id;
+
+  return`
+<div class="card${isExp?' expanded':''}" id="c-${r.id}" onclick="toggle(${r.id},event)">
+  <div class="card-hdr">
+    <div class="dot ${sc}"></div>
+    <div class="card-info">
+      <div class="feat-name" title="${esc(feat)}">${esc(feat)}</div>
+      <a class="branch-tag" href="https://github.com/${cfg.owner}/${cfg.repo}/tree/${encodeURIComponent(b)}"
+         target="_blank" onclick="event.stopPropagation()">⎇ ${esc(b)}</a>
+    </div>
+    <div class="card-meta">
+      <div class="run-date">${fmtDate(r.created_at)}</div>
+      ${dur?`<div class="run-dur">⏱ ${dur}</div>`:''}
+    </div>
+  </div>
+  ${stages(r.id)}
+  ${tokBlock(r.id)}
+  <div class="card-acts">
+    <a class="btn-sm" href="${r.html_url}" target="_blank" onclick="event.stopPropagation()">↗ Run</a>
+    <a class="btn-sm" href="https://github.com/${cfg.owner}/${cfg.repo}/tree/${encodeURIComponent(b)}/sdlc"
+       target="_blank" onclick="event.stopPropagation()">📁 Artifacts</a>
+    <button class="btn-sm" onclick="event.stopPropagation();toggle(${r.id},event)">${isExp?'▲ Collapse':'▼ Details'}</button>
+  </div>
+  ${isExp?detailHtml(r,a):''}
+</div>`
+}
+
+function detailHtml(r,a){
+  const qa=a?.qa, tr=a?.tr;
+  const vBanner=qa?`<div class="verdict-banner ${qa.verdict==='APPROVED'?'ok':'fail'}">
+    ${qa.verdict==='APPROVED'?'✅':'❌'} QA Verdict: ${qa.verdict}
+    ${qa.regr?`<span class="regr-note">· ${esc(qa.regr.substring(0,90))}</span>`:''}
+  </div>`:'';
+  const tCounts=tr?`<div class="test-counts">
+    <span class="tc-pass">✓ ${tr.passed} passed</span>
+    <span class="tc-fail">✗ ${tr.failed} failed</span>
+    <span class="tc-skip">${tr.skipped} skipped</span>
+  </div>`:'';
+
+  return`<div class="detail" onclick="event.stopPropagation()">
+    ${vBanner}${tCounts}
+    <div class="tabs">
+      <button class="tab-btn on" onclick="tab(event,'t-in-${r.id}','${r.id}')">Intent</button>
+      <button class="tab-btn"   onclick="tab(event,'t-ps-${r.id}','${r.id}')">Overview</button>
+      <button class="tab-btn"   onclick="tab(event,'t-cr-${r.id}','${r.id}')">Code Review</button>
+      <button class="tab-btn"   onclick="tab(event,'t-tr-${r.id}','${r.id}')">Tests</button>
+      <button class="tab-btn"   onclick="tab(event,'t-qa-${r.id}','${r.id}')">QA Report</button>
+      <button class="tab-btn"   onclick="tab(event,'t-tk-${r.id}','${r.id}')">Tokens</button>
+    </div>
+    <div id="t-in-${r.id}" class="tab on"><div class="md">${md(a?.raw?.intent||'*No intent recorded for this run.*')}</div></div>
+    <div id="t-ps-${r.id}" class="tab"><div class="md">${md(a?.raw?.ps)}</div></div>
+    <div id="t-cr-${r.id}" class="tab"><div class="md">${md(a?.raw?.cr)}</div></div>
+    <div id="t-tr-${r.id}" class="tab"><div class="md">${md(a?.raw?.tr)}</div></div>
+    <div id="t-qa-${r.id}" class="tab"><div class="md">${md(a?.raw?.qa)}</div></div>
+    <div id="t-tk-${r.id}" class="tab">
+      ${a?.tokenUsage?.agents?.length?`<div class="chart-wrap"><canvas id="ch-${r.id}"></canvas></div>${tokTable(a.tokenUsage)}`
+        :'<p style="color:var(--faint);font-size:.8rem">No token data available.</p>'}
+    </div>
+  </div>`
+}
+
+function tokTable(tu){
+  if(!tu?.agents?.length)return'';
+  const hasCache=tu.agents.some(a=>a.cacheRead>0||a.cacheWrite>0);
+  const th=s=>`<th style="text-align:right;padding:5px 8px;border-bottom:1px solid var(--border)">${s}</th>`;
+  const td=(v,extra='')=>`<td style="padding:5px 8px;text-align:right;font-family:var(--mono)${extra}">${v}</td>`;
+  const cacheHdr=hasCache?th('Cache read')+th('Cache write')+th('Eff. input'):'';
+  return`<table style="width:100%;border-collapse:collapse;font-size:.73rem;margin-top:12px">
+    <thead><tr style="color:var(--muted)">
+      <th style="text-align:left;padding:5px 8px;border-bottom:1px solid var(--border)">Agent</th>
+      ${th('API Calls')}${th('Input')}${th('Output')}${th('Total')}
+      ${cacheHdr}
+      <th style="text-align:right;padding:5px 8px;border-bottom:1px solid var(--border)">Peak ctx</th>
+    </tr></thead>
+    <tbody>${tu.agents.map(a=>{
+      const cacheCells=hasCache
+        ?td(a.cacheRead.toLocaleString(),';color:var(--muted)')+
+          td(a.cacheWrite.toLocaleString(),';color:var(--muted)')+
+          td(a.effInput.toLocaleString(),';color:var(--green)')
+        :'';
+      return`<tr>
+      <td style="padding:5px 8px;color:${COLORS[a.name]||'var(--text)'};font-weight:500">${esc(a.name)}</td>
+      <td style="padding:5px 8px;text-align:right;color:var(--muted)">${a.calls.toLocaleString()}</td>
+      ${td(a.input.toLocaleString())}${td(a.output.toLocaleString())}
+      ${td(a.total.toLocaleString(),';font-weight:600')}
+      ${cacheCells}
+      <td style="padding:5px 8px;text-align:right;color:${a.peakPct>=75?'var(--red)':a.peakPct>=50?'var(--yellow)':'var(--muted)'}">${a.peakPct.toFixed(1)}%</td>
+    </tr>`}).join('')}
+    <tr style="font-weight:600;border-top:1px solid var(--border)">
+      <td style="padding:6px 8px">TOTAL</td>
+      <td style="padding:6px 8px;text-align:right">${(tu.totals?.calls||0).toLocaleString()}</td>
+      ${td((tu.totals?.input||0).toLocaleString())}
+      ${td((tu.totals?.output||0).toLocaleString())}
+      ${td((tu.totals?.total||0).toLocaleString(),';color:var(--accent)')}
+      ${hasCache
+        ?td((tu.totals?.cacheRead||0).toLocaleString(),';color:var(--muted);font-weight:400')+
+          td((tu.totals?.cacheWrite||0).toLocaleString(),';color:var(--muted);font-weight:400')+
+          td((tu.totals?.effInput||0).toLocaleString(),';color:var(--green)')
+        :''}
+      <td style="padding:6px 8px"></td>
+    </tr></tbody>
+  </table>
+  ${hasCache?`<p style="font-size:.68rem;color:var(--faint);margin-top:6px">
+    Eff. input = input&nbsp;−&nbsp;cache_read×0.90&nbsp;+&nbsp;cache_write×0.25 (billed-equivalent at base rate)</p>`:''}
+`
+}
+
+// ── Interactions ───────────────────────────────────────────────────
+function toggle(id,e){
+  if(e.target.closest('a'))return;
+  if(charts[id]){charts[id].destroy();delete charts[id]}
+  expanded=expanded===id?null:id;render()
+}
+
+function tab(e,tabId,runId){
+  const card=document.getElementById(`c-${runId}`);
+  card.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  card.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('on'));
+  e.target.classList.add('on');
+  const t=document.getElementById(tabId);if(t)t.classList.add('on');
+  if(tabId.includes('t-tk')&&!charts[runId]){
+    const run=runs.find(r=>r.id===+runId);
+    if(run)drawChart(runId,arts[run.id]?.tokenUsage);
+  }
+}
+
+// ── Charts ─────────────────────────────────────────────────────────
+function drawBars(runId,tu){
+  const el=document.getElementById(`bars-${runId}`);
+  if(!el||!tu?.agents?.length)return;
+  const max=Math.max(...tu.agents.map(a=>a.total));
+  el.innerHTML=tu.agents.map(a=>{
+    const pct=max>0?(a.total/max*100).toFixed(1):0;
+    const c=COLORS[a.name]||'#8b5cf6';
+    return`<div class="tok-row">
+      <div class="tok-lbl" style="color:${c}">${a.name.split(' ')[0]}</div>
+      <div class="tok-bar-bg"><div class="tok-bar" style="width:${pct}%;background:${c}88"></div></div>
+      <div class="tok-num">${fmtN(a.total)}</div>
+    </div>`
+  }).join('')
+}
+
+function drawChart(runId,tu){
+  if(!tu?.agents?.length)return;
+  const canvas=document.getElementById(`ch-${runId}`);
+  if(!canvas)return;
+  if(charts[runId]){charts[runId].destroy()}
+  charts[runId]=new Chart(canvas,{
+    type:'bar',
+    data:{
+      labels:tu.agents.map(a=>a.name),
+      datasets:[
+        {label:'Input',data:tu.agents.map(a=>a.input),
+          backgroundColor:tu.agents.map(a=>(COLORS[a.name]||'#8b5cf6')+'99'),
+          borderColor:tu.agents.map(a=>COLORS[a.name]||'#8b5cf6'),borderWidth:1},
+        {label:'Output',data:tu.agents.map(a=>a.output),
+          backgroundColor:tu.agents.map(a=>(COLORS[a.name]||'#8b5cf6')+'33'),
+          borderColor:tu.agents.map(a=>(COLORS[a.name]||'#8b5cf6')+'88'),borderWidth:1}
+      ]
+    },
+    options:{
+      indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:'#718096',font:{size:11,family:'Inter'}}},
+        tooltip:{callbacks:{label:ctx=>` ${ctx.dataset.label}: ${ctx.raw.toLocaleString()} tokens`}}
+      },
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#718096',font:{size:10},callback:v=>fmtN(v)}},
+        y:{grid:{display:false},ticks:{color:'#e2e8f0',font:{size:11,family:'Inter'}}}
+      }
+    }
+  })
+}
+
+// ── Markdown renderer ──────────────────────────────────────────────
+function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function md(src){
+  if(!src)return'<em>No content available.</em>';
+  let s=esc(src);
+  // Headers
+  s=s.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  s=s.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+  s=s.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+  // Bold / italic / code
+  s=s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  s=s.replace(/\*(.+?)\*/g,'<em>$1</em>');
+  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  // HR
+  s=s.replace(/^---+$/gm,'<hr>');
+  // Tables — collect consecutive | lines
+  s=s.replace(/((?:^\|[^\n]+\|\n?)+)/gm,(block)=>{
+    const rows=block.trim().split('\n');
+    let html='<table>';
+    rows.forEach((row,i)=>{
+      if(/^\|[\s:|‐-]+\|/.test(row))return; // separator
+      const cells=row.split('|').slice(1,-1).map(c=>c.trim());
+      const tag=i===0?'th':'td';
+      html+=`<tr>${cells.map(c=>`<${tag}>${c}</${tag}>`).join('')}</tr>`;
+    });
+    return html+'</table>';
+  });
+  // Lists
+  s=s.replace(/^[-*] (.+)$/gm,'<li>$1</li>');
+  s=s.replace(/(<li>[^]*?<\/li>\n?)+/g,m=>`<ul>${m}</ul>`);
+  // Paragraphs
+  s=s.replace(/\n{2,}/g,'</p><p>').replace(/\n/g,' ');
+  return`<p>${s}</p>`
+}
+
+// ── Init ───────────────────────────────────────────────────────────
+(function(){
+  if(loadCfg()){load()}
+  else{
+    openCfg();
+    grid('<div class="empty"><div class="empty-icon">🔐</div>Configure GitHub token to start</div>')
+  }
+})();
+</script>
+</body>
+</html>

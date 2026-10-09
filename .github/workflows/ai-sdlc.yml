@@ -1,0 +1,132 @@
+name: 🤖 AI-SDLC Agentic Pipeline
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to process'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unlike the pipeline version (5 separate jobs), this is a single job.
+# The Orchestrator agent drives all stages internally, including retry loops.
+#
+# Human review gates: configure in claude.md + GitHub Environment settings.
+# The workflow uses the "human-review" environment — add required reviewers
+# there to pause the pipeline before the Orchestrator creates the PR.
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  run-pipeline:
+    name: "🤖 Agentic SDLC — Orchestrator"
+    runs-on: ubuntu-latest
+    environment: human-review    # add required reviewers in repo Settings to enable gate
+    if: github.event.label.name == 'in-build' || github.event_name == 'workflow_dispatch'
+
+    steps:
+        - uses: actions/checkout@v4
+          with:
+            fetch-depth: 1
+            token: ${{ secrets.PIPELINE_PUSH_TOKEN }}
+
+        - name: Set run ID
+          run: echo "PIPELINE_RUN_ID=run-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+
+        - uses: actions/setup-python@v5
+          with:
+            python-version: '3.12'
+            cache: 'pip'
+            cache-dependency-path: requirements.txt
+
+        - name: Install pipeline dependencies
+          run: pip install -r requirements.txt
+
+        - name: Start LiteLLM proxy
+          run: |
+            litellm --config litellm-config.yaml --port 4000 &
+            echo $! > /tmp/litellm.pid
+            echo "Waiting for LiteLLM proxy to be ready…"
+            for i in $(seq 1 30); do
+              python -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')" 2>/dev/null && echo "Proxy ready after ${i} attempts" && break
+              sleep 3
+            done
+          env:
+            AZURE_FOUNDRY_ENDPOINT:         ${{ secrets.AZURE_FOUNDRY_ENDPOINT }}
+            AZURE_FOUNDRY_OPENAI_ENDPOINT:  ${{ secrets.AZURE_FOUNDRY_OPENAI_ENDPOINT }}
+            AZURE_FOUNDRY_KEY:              ${{ secrets.AZURE_FOUNDRY_KEY }}
+            LITELLM_MASTER_KEY:             ${{ secrets.LITELLM_MASTER_KEY }}
+
+        # Cache the incremental index state between runs so each execution only
+        # re-indexes files that changed since the last pipeline run.
+        - name: Restore index state cache
+          uses: actions/cache@v4
+          with:
+            path: .index/index-state.json
+            key: index-state-${{ github.ref_name }}-${{ hashFiles('CLAUDE.md') }}
+            restore-keys: |
+              index-state-${{ github.ref_name }}-
+
+        - name: Fetch intent from issue
+          run: |
+            ISSUE_NUMBER="${{ github.event.issue.number || inputs.issue_number }}"
+            
+            # Fetch issue body and title via GitHub CLI
+            gh issue view $ISSUE_NUMBER --json title,body \
+              --jq '"# " + .title + "\n\n" + .body' > intent.md
+            
+            # Derive and create feature branch from issue title
+            BRANCH=$(gh issue view $ISSUE_NUMBER --json title \
+              --jq '.title | ascii_downcase | gsub("[^a-z0-9]+"; "-") | "feature/" + .')
+            git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+            echo "PIPELINE_BRANCH=$BRANCH" >> $GITHUB_ENV
+            echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_ENV
+            
+            # Comment on issue to acknowledge pipeline start
+            gh issue comment $ISSUE_NUMBER \
+              --body "🤖 Pipeline started on branch \`$BRANCH\`. [View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          env:
+            GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: 🤖 Run Orchestrator agent
+          run: python orchestrator.py
+          timeout-minutes: 90
+          env:
+            LITELLM_PROXY_URL: http://localhost:4000
+            LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+            AZURE_FOUNDRY_ENDPOINT: ${{ secrets.AZURE_FOUNDRY_ENDPOINT }}
+            AZURE_FOUNDRY_OPENAI_ENDPOINT: ${{ secrets.AZURE_FOUNDRY_OPENAI_ENDPOINT }}
+            AZURE_FOUNDRY_KEY: ${{ secrets.AZURE_FOUNDRY_KEY }}
+            OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            # PAT with read access to the target repo — the built-in GITHUB_TOKEN
+            # is scoped to this pipeline repo only and cannot clone other repos.
+            TARGET_REPO_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+            QDRANT_URL: ${{ secrets.QDRANT_URL }}
+            QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+            LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+            LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+            LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+            GITHUB_REF_NAME: ${{ github.ref_name }}
+            PIPELINE_RUN_ID: ${{ env.PIPELINE_RUN_ID }}
+            ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
+
+        - name: Upload all SDLC artifacts
+          if: always()
+          uses: actions/upload-artifact@v4
+          with:
+            name: sdlc-artifacts
+            path: sdlc/
+            retention-days: 30
+
+        - name: Pipeline summary
+          if: always()
+          run: |
+            if [ -f sdlc/pipeline-summary.md ]; then
+              cat sdlc/pipeline-summary.md >> $GITHUB_STEP_SUMMARY
+            fi

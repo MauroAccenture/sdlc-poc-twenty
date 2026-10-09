@@ -1,0 +1,122 @@
+model_list:
+  # ── Individual model deployments ────────────────────────────────────────────
+  - model_name: gpt-5-mini
+    litellm_params:
+      model:       openai/gpt-5-mini
+      api_base:    os.environ/AZURE_FOUNDRY_OPENAI_ENDPOINT
+      api_key:     os.environ/AZURE_FOUNDRY_KEY
+      drop_params: true
+
+  - model_name: gpt-5.6-luna
+    litellm_params:
+      model:       openai/gpt-5.6-luna
+      api_base:    os.environ/AZURE_FOUNDRY_OPENAI_ENDPOINT
+      api_key:     os.environ/AZURE_FOUNDRY_KEY
+      drop_params: true
+
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model:       claude-haiku-4-5
+      api_base:    os.environ/AZURE_FOUNDRY_ENDPOINT
+      api_key:     os.environ/AZURE_FOUNDRY_KEY
+      drop_params: true
+
+  # ── Auto Router — single model name all agents call ─────────────────────────
+  - model_name: sdlc-router
+    litellm_params:
+      model:       auto_router/complexity_router
+      drop_params: true
+      complexity_router_config:
+
+        tiers:
+          SIMPLE:    gpt-5.6-luna
+          MEDIUM:    gpt-5.6-luna
+          COMPLEX:   gpt-5.6-luna
+          REASONING: gpt-5.6-luna
+
+        # Agent-aware keyword rules — run before classifier, escalate to
+        # highest matched tier. Designed around your five agent roles.
+        keyword_tier_rules:
+          - keywords: ["technical design", "architecture", "design document",
+                       "system design", "propose", "evaluate trade-off"]
+            tier: REASONING
+          - keywords: ["implement", "write code", "generate", "create file",
+                       "modify", "refactor", "switch", "migrate", "replace",
+                       "azure function", "container app", "service bus"]
+            tier: COMPLEX
+          - keywords: ["unit test", "test case", "test coverage",
+                       "write tests", "tester"]
+            tier: MEDIUM
+          - keywords: ["review", "approved", "verdict", "findings",
+                       "label", "rename", "typo", "comment", "wording",
+                       "minor", "cosmetic"]
+            tier: SIMPLE
+        semantic_keyword_matching: false
+
+        # LLM classifier — reads the actual task content, falls back to
+        # heuristic if it times out
+        classifier_type: llm
+        classifier_llm_config:
+          model:       gpt-5.6-luna
+          timeout_ms:  2000
+          system_prompt: |
+            You are a task complexity classifier for an AI software
+            development pipeline with five agents:
+            Designer, Coder, Code Reviewer, Tester, QA Engineer.
+
+            Classify each request into exactly one tier:
+
+            REASONING — Designer tasks: producing technical designs,
+              architecture decisions, evaluating approaches, cross-cutting
+              concerns. Any task requiring long-term architectural judgment.
+
+            COMPLEX — Coder tasks: generating or modifying source code
+              across multiple files, non-trivial refactoring, switching
+              infrastructure (e.g. container app to Azure Function),
+              replacing integration mechanisms (e.g. HTTP to Service Bus).
+
+            MEDIUM — Tester tasks: writing unit tests, adding test coverage
+              for a specific function or endpoint, extending an existing
+              test suite.
+
+            SIMPLE — Code Reviewer or QA Engineer tasks: reviewing code,
+              approving or rejecting changes, assessing coverage,
+              trivial changes (label rename, typo fix, comment update,
+              field reorder).
+
+            Reply with exactly one word: REASONING, COMPLEX, MEDIUM,
+            or SIMPLE. Nothing else.
+          classifier_context_window_size: 2
+
+        classifier_fallback: heuristic
+
+        # Session affinity — pin the model assigned on turn 1 for the
+        # entire agent session. session_id is set per agent per run
+        # in runner.py so each agent gets its own pinned model.
+        session_affinity: true
+        session_affinity_ttl_seconds: 3600
+
+        complexity_router_default_model: gpt-5.6-luna
+
+# ── Router settings — prompt caching ─────────────────────────────────────────
+# cache_control_injection_points tells LiteLLM to inject Anthropic prompt
+# caching markers on the system message of every request, so the large
+# stable prefix (system prompt + preloaded context) is cached across all
+# iterations of an agent's tool-use loop.
+#
+# optional_pre_call_checks: ["prompt_caching"] ensures that if multiple
+# deployments ever back a tier, continuing turns are routed back to the
+# specific deployment that already holds the cached prefix — not just the
+# same model name on a different instance.
+router_settings:
+  num_retries: 3          # retry failed upstream calls before returning an error
+  retry_after: 5          # seconds to wait between retries
+  cooldown_time: 0       # seconds a deployment stays in cooldown after a 429 (default: 60)
+  default_litellm_params:
+    cache_control_injection_points:
+      - location: message
+        role: system
+  optional_pre_call_checks: ["prompt_caching"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

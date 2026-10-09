@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(az bicep build *)",
+      "WebFetch(domain:api.tradera.com)"
+    ]
+  }
+}

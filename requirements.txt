@@ -1,0 +1,30 @@
+flask>=3.0.0
+pyjwt>=2.8.0
+bcrypt>=4.1.0
+anthropic>=0.40.0
+PyYAML>=6.0
+langfuse>=4.0.0
+litellm[proxy]>=1.94.0
+# Dev / test
+pytest>=8.0.0
+pytest-json-report>=1.5.0
+
+# RAG — embeddings (free, local)
+sentence-transformers>=2.7.0
+
+# RAG — vector store (local fallback)
+# chromadb>=0.5.0
+
+# RAG — vector store (Qdrant Cloud — active)
+# query_points() introduced in 1.10; search() removed in 2.0
+qdrant-client>=1.10.0
+
+# RAG — Azure AI Search (install when switching store provider)
+# azure-search-documents>=11.4.0
+
+# OpenAI SDK — used by runner.py for OpenAI/Azure-hosted OpenAI agents
+openai>=1.0.0
+
+# SharePoint connector (install when implementing)
+# msal>=1.28.0
+# office365-rest-python-client>=2.5.0
