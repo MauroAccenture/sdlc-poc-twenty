@@ -88,12 +88,6 @@ jobs:
             restore-keys: |
               index-state-${{ github.ref_name }}-
 
-        - name: Install frontend dependencies
-          run: npm ci --silent --prefix app
-
-        - name: Add Angular CLI to PATH
-          run: echo "$GITHUB_WORKSPACE/app/node_modules/.bin" >> $GITHUB_PATH
-
         - name: Fetch intent from issue
           run: |
             EVENT_NAME="${{ github.event_name }}"
