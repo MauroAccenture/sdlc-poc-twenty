@@ -3,6 +3,10 @@ name: 🤖 AI-SDLC Agentic Pipeline
 on:
   issues:
     types: [labeled]
+  pull_request:
+    types: [closed]
+    branches:
+      - 'feature/**'
   workflow_dispatch:
     inputs:
       issue_number:
@@ -18,22 +22,34 @@ permissions:
 # Unlike the pipeline version (5 separate jobs), this is a single job.
 # The Orchestrator agent drives all stages internally, including retry loops.
 #
-# Human review gates: configure in AGENTS.md + GitHub Environment settings.
-# The workflow uses the "human-review" environment — add required reviewers
-# there to pause the pipeline before the Orchestrator creates the PR.
+# Human review gates: configure human_review: true in AGENTS.md for the
+# desired stage. When a gate fires the orchestrator:
+#   1. Creates a review/* branch from the feature branch with current artifacts.
+#   2. Opens a PR: review/* → feature/* (NOT main) and labels the issue 'in-review'.
+#   3. Exits cleanly — main is never touched until the full pipeline completes.
+# To resume: merge the review PR into the feature branch — this workflow
+# re-triggers on pull_request.closed, checks out the feature branch (which now
+# contains the merged artifacts + checkpoint), and the orchestrator resumes
+# from the saved checkpoint (skipping already-completed stages).
+# Fallback: adding the 'resume-pipeline' label to the issue also resumes.
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
   run-pipeline:
     name: "🤖 Agentic SDLC — Orchestrator"
     runs-on: ubuntu-latest
-    environment: human-review    # add required reviewers in repo Settings to enable gate
-    if: github.event.label.name == 'in-build' || github.event_name == 'workflow_dispatch'
+    if: |
+      (github.event_name == 'issues' && contains(fromJSON('["in-build", "resume-pipeline"]'), github.event.label.name)) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'review/')) ||
+      github.event_name == 'workflow_dispatch'
 
     steps:
         - uses: actions/checkout@v4
           with:
             fetch-depth: 1
             token: ${{ secrets.PIPELINE_PUSH_TOKEN }}
+            # For PR-merge resumes, check out the feature branch (PR base) directly
+            # so the checkpoint and prior artifacts are present from the start.
+            ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref }}
 
         - name: Set run ID
           run: echo "PIPELINE_RUN_ID=run-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
@@ -72,24 +88,70 @@ jobs:
             restore-keys: |
               index-state-${{ github.ref_name }}-
 
+        - name: Install frontend dependencies
+          run: npm ci --silent --prefix app
+
+        - name: Add Angular CLI to PATH
+          run: echo "$GITHUB_WORKSPACE/app/node_modules/.bin" >> $GITHUB_PATH
+
         - name: Fetch intent from issue
           run: |
-            ISSUE_NUMBER="${{ github.event.issue.number || inputs.issue_number }}"
-            
-            # Fetch issue body and title via GitHub CLI
-            gh issue view $ISSUE_NUMBER --json title,body \
-              --jq '"# " + .title + "\n\n" + .body' > intent.md
-            
-            # Derive and create feature branch from issue title
-            BRANCH=$(gh issue view $ISSUE_NUMBER --json title \
-              --jq '.title | ascii_downcase | gsub("[^a-z0-9]+"; "-") | "feature/" + .')
-            git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
-            echo "PIPELINE_BRANCH=$BRANCH" >> $GITHUB_ENV
-            echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_ENV
-            
-            # Comment on issue to acknowledge pipeline start
-            gh issue comment $ISSUE_NUMBER \
-              --body "🤖 Pipeline started on branch \`$BRANCH\`. [View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            EVENT_NAME="${{ github.event_name }}"
+            TRIGGER_LABEL="${{ github.event.label.name }}"
+
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              # Triggered by merging a review/* PR into the feature branch.
+              # The feature branch is already checked out (see checkout ref above).
+              BRANCH="${{ github.event.pull_request.base.ref }}"
+
+              # Read the issue number stored in the checkpoint by the pipeline.
+              BRANCH_SLUG=$(echo "$BRANCH" | sed 's/[^a-zA-Z0-9._-]/-/g')
+              CHECKPOINT="sdlc/checkpoint-${BRANCH_SLUG}.json"
+              ISSUE_NUMBER=""
+              if [ -f "$CHECKPOINT" ]; then
+                ISSUE_NUMBER=$(python3 -c "import json; print(json.load(open('$CHECKPOINT')).get('issue_number', ''))" 2>/dev/null || true)
+              fi
+
+              echo "PIPELINE_BRANCH=$BRANCH" >> $GITHUB_ENV
+              echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_ENV
+
+              if [ -n "$ISSUE_NUMBER" ]; then
+                # Refresh intent.md from the issue in case it was edited during review.
+                gh issue view $ISSUE_NUMBER --json title,body \
+                  --jq '"# " + .title + "\n\n" + .body' > intent.md
+                gh issue comment $ISSUE_NUMBER \
+                  --body "🤖 Review PR merged — pipeline resuming from checkpoint on branch \`$BRANCH\`. [View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+                gh issue edit $ISSUE_NUMBER --remove-label "in-review" --add-label "in-build" || true
+              elif [ -f "intent.md" ]; then
+                echo "  Issue number not found in checkpoint — using existing intent.md on branch"
+              else
+                echo "ERROR: No issue number in checkpoint and no intent.md found" && exit 1
+              fi
+            else
+              # Triggered by an issue label or workflow_dispatch.
+              ISSUE_NUMBER="${{ github.event.issue.number || inputs.issue_number }}"
+
+              gh issue view $ISSUE_NUMBER --json title,body \
+                --jq '"# " + .title + "\n\n" + .body' > intent.md
+
+              # Derive feature branch name deterministically from issue title.
+              # On resume runs the branch already exists — the fallback checkout
+              # picks it up along with the checkpoint files saved by the gate.
+              BRANCH=$(gh issue view $ISSUE_NUMBER --json title \
+                --jq '.title | ascii_downcase | gsub("[^a-z0-9]+"; "-") | "feature/" + .')
+              git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+              echo "PIPELINE_BRANCH=$BRANCH" >> $GITHUB_ENV
+              echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> $GITHUB_ENV
+
+              if [ "$TRIGGER_LABEL" = "resume-pipeline" ]; then
+                gh issue comment $ISSUE_NUMBER \
+                  --body "🤖 Pipeline resuming from checkpoint on branch \`$BRANCH\`. [View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+                gh issue edit $ISSUE_NUMBER --remove-label "resume-pipeline" --add-label "in-build" || true
+              else
+                gh issue comment $ISSUE_NUMBER \
+                  --body "🤖 Pipeline started on branch \`$BRANCH\`. [View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+              fi
+            fi
           env:
             GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -115,6 +177,7 @@ jobs:
             GITHUB_REF_NAME: ${{ github.ref_name }}
             PIPELINE_RUN_ID: ${{ env.PIPELINE_RUN_ID }}
             ISSUE_NUMBER: ${{ env.ISSUE_NUMBER }}
+            PIPELINE_BRANCH: ${{ env.PIPELINE_BRANCH }}
 
         - name: Upload all SDLC artifacts
           if: always()
