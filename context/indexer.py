@@ -44,6 +44,7 @@ stored only a timestamp string are normalised automatically.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -54,8 +55,9 @@ from context.chunker import chunk_document, chunks_to_documents
 from context.graph_extractor import extract_graph, graph_to_metadata, graph_to_markdown
 from context.models import Document, DocumentType
 
-EMBED_BATCH_SIZE = 32
-STATE_FILE       = ".index/index-state.json"
+EMBED_BATCH_SIZE = 128
+MAX_FETCH_WORKERS = 16
+STATE_FILE        = ".index/index-state.json"
 
 
 def _detect_doc_type(path: str, language: str) -> DocumentType:
@@ -142,9 +144,10 @@ class Indexer:
                 print(f"  Incremental sync since {since.isoformat()}")
 
                 # ── Deletion detection ────────────────────────────────────────
-                # Compare current file listing against what was indexed last run.
-                # Files that disappeared must have their chunks removed from the store.
-                current_ids = {d.id for d in connector.list_documents()}
+                # list_documents() is also needed by get_changes_since on some
+                # connectors, so cache it to avoid a second full directory scan.
+                all_docs = connector.list_documents()
+                current_ids = {d.id for d in all_docs}
                 prev_chunk_map: dict[str, list[str]] = src_state.get("doc_chunks", {})
                 deleted_meta_ids = set(prev_chunk_map.keys()) - current_ids
 
@@ -225,31 +228,26 @@ class Indexer:
         stored_hashes: dict[str, str] = (src_state or {}).get("content_hashes", {})
         prev_chunk_map: dict[str, list[str]] = (src_state or {}).get("doc_chunks", {})
 
+        # ── Layer 2: content-hash fine check (serial, no I/O) ─────────────────
+        to_fetch: list[DocumentMetadata] = []
         for meta in docs_meta:
-            # ── Layer 2: content-hash fine check ─────────────────────────────
             if meta.content_hash:
                 content_hash_map[meta.id] = meta.content_hash
                 if meta.content_hash == stored_hashes.get(meta.id):
-                    # Content unchanged — preserve existing chunk IDs and skip
                     if meta.id in prev_chunk_map:
                         doc_chunk_map[meta.id] = prev_chunk_map[meta.id]
                     skipped += 1
                     continue
+            to_fetch.append(meta)
 
-            try:
-                content = connector.fetch_document(meta.id)
-            except Exception as e:
-                print(f"    ⚠️  Failed to fetch {meta.path}: {e}")
-                failed += 1
-                continue
-
-            doc_type   = _detect_doc_type(meta.path, meta.language)
+        def _process(meta: DocumentMetadata):
+            content = connector.fetch_document(meta.id)
+            doc_type = _detect_doc_type(meta.path, meta.language)
             if "memory" in source_id.lower():
                 doc_type = DocumentType.MEMORY
             graph      = extract_graph(meta.path, content, meta.language)
             graph_meta = graph_to_metadata(graph)
-
-            base_doc = Document(
+            base_doc   = Document(
                 id=f"{source_id}::{meta.id}",
                 source_id=source_id,
                 path=meta.path,
@@ -259,26 +257,35 @@ class Indexer:
                 last_modified=meta.last_modified,
                 metadata=graph_meta,
             )
-
-            chunks     = chunk_document(
-                path=meta.path,
-                content=content,
-                doc_type=doc_type,
-                language=meta.language,
-            )
+            chunks     = chunk_document(path=meta.path, content=content, doc_type=doc_type, language=meta.language)
             chunk_docs = chunks_to_documents(chunks, base_doc)
-
-            doc_chunk_map[meta.id] = [d.id for d in chunk_docs]
-            pending_docs.extend(chunk_docs)
-
+            note       = None
             if graph.entities or graph.imports:
                 note_path = f"patterns/graph/{meta.path.replace('/', '_')}.md"
-                graph_notes[note_path] = graph_to_markdown(graph)
+                note = (note_path, graph_to_markdown(graph))
+            return chunk_docs, note
 
-            if len(pending_docs) >= EMBED_BATCH_SIZE:
-                self._embed_and_store(pending_docs)
-                indexed += len(pending_docs)
-                pending_docs = []
+        # ── Parallel fetch + chunk + graph-extract ────────────────────────────
+        with ThreadPoolExecutor(max_workers=MAX_FETCH_WORKERS) as executor:
+            future_to_meta = {executor.submit(_process, m): m for m in to_fetch}
+            for future in as_completed(future_to_meta):
+                meta = future_to_meta[future]
+                try:
+                    chunk_docs, note = future.result()
+                except Exception as e:
+                    print(f"    ⚠️  Failed to process {meta.path}: {e}")
+                    failed += 1
+                    continue
+
+                doc_chunk_map[meta.id] = [d.id for d in chunk_docs]
+                pending_docs.extend(chunk_docs)
+                if note:
+                    graph_notes[note[0]] = note[1]
+
+                if len(pending_docs) >= EMBED_BATCH_SIZE:
+                    self._embed_and_store(pending_docs)
+                    indexed += len(pending_docs)
+                    pending_docs = []
 
         if pending_docs:
             self._embed_and_store(pending_docs)
